@@ -1,5 +1,7 @@
 # Shift’n Roll
 
+Developed with ChatGPT 6.3 Sol in two prompts.
+
 Shift’n Roll is a desktop browser arcade game. Move a rocket launcher across Earth’s surface and intercept incoming targets. Engine power and wind oscillate continuously, so launch timing matters as much as alignment.
 
 ## Play locally
