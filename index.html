@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="Time your rocket launch to protect Earth from seven space threats.">
+<title>Shift’n Roll</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#0a0a14;color:#f4f0ff;font:16px system-ui,sans-serif}main{max-width:1420px;margin:auto;padding:24px clamp(14px,3vw,44px)}header,.hud,.meters,.legend,.row{display:flex;align-items:center;gap:18px}.actions{display:flex;gap:8px}header{justify-content:space-between;margin-bottom:14px}h1{margin:0;font-size:clamp(28px,4vw,52px);font-weight:950;letter-spacing:-.075em;line-height:1}h1 i{color:#ff8e63}button{font:inherit;font-weight:800;color:inherit;background:#242138;border:1px solid #514761;border-radius:9px;padding:9px 14px;cursor:pointer}button:hover,button:focus-visible{border-color:#ff996f}button:disabled{opacity:.5;cursor:default}.hud{margin-bottom:9px;justify-content:space-between;color:#cbc3e3;flex-wrap:wrap}.hud strong{color:#fff}.stage{position:relative;overflow:hidden;border:1px solid #4d385c;border-radius:18px;background:#100d24}canvas{display:block;width:100%;height:auto;aspect-ratio:1100/540}.overlay{position:absolute;inset:0;display:grid;place-items:center;text-align:center;background:#100a1d80;padding:12px}.overlay[hidden]{display:none}.overlay article{width:min(460px,96%);padding:clamp(13px,3vw,30px);border:1px solid #9c6381;border-radius:17px;background:#171025ec;box-shadow:0 14px 80px #0a0618}.overlay h2{margin:0;font-size:clamp(23px,4vw,48px);letter-spacing:-.05em}.overlay p{line-height:1.45;color:#ddd2eb;margin:8px 0 18px}.primary{background:#ffa177;color:#211026;border-color:#ffa177}.meters{align-items:stretch;margin-top:12px}.meter{min-width:0;flex:1;background:#151323;border:1px solid #373047;border-radius:12px;padding:12px 16px}.row{justify-content:space-between;margin-bottom:9px}.row strong{font-variant-numeric:tabular-nums}.track{position:relative;height:10px;border-radius:10px;background:linear-gradient(90deg,#4e2c56,#ff9d6d)}.wind{background:linear-gradient(90deg,#6a49bb,#272541 50%,#52cbdc)}.wind:before{content:'';position:absolute;left:50%;height:100%;border-left:1px solid #ad9fbd}.pin{position:absolute;width:4px;height:16px;top:-3px;border-radius:4px;background:white;box-shadow:0 0 6px #fff;transform:translateX(-50%)}.legend{justify-content:space-between;flex-wrap:wrap;color:#cbc3e3;margin-top:13px}kbd{background:#221d33;border:1px solid #514661;border-bottom-width:3px;border-radius:5px;padding:2px 6px;color:white}#status{color:#ffc19e;min-height:1.4em}@media(max-width:640px){header,.meters{gap:8px}.meter{padding:8px}.legend,.hud{gap:8px}.overlay p{font-size:14px;margin:4px 0 9px}canvas{aspect-ratio:auto;min-height:240px}}
+</style>
+<main>
+<header><h1>Shift’n <i>Roll</i></h1><div class="actions"><button id="sound" type="button" aria-pressed="true">Sound on</button><button id="pause" disabled>Pause</button></div></header>
+<div class="hud"><span>Level <strong id="level">1 / 7</strong> · <strong id="targetName"></strong></span><span>Score <strong id="score">0</strong> · Earth <strong id="life">3 / 3</strong></span></div>
+<div class="stage">
+<canvas id="arena" width="1100" height="540" aria-label="Arcade game arena"></canvas>
+<div class="overlay" id="overlay"><article><h2 id="title">Defend Earth</h2><p id="intro">Move the launchpad with the arrow keys. Watch the engine power and wind, then press Shift to launch.</p><button class="primary" id="start">Start game</button></article></div>
+</div>
+<div class="meters">
+<div class="meter"><div class="row"><span>Engine power</span><strong id="powerText"></strong></div><div class="track"><span class="pin" id="powerPin"></span></div></div>
+<div class="meter"><div class="row"><span>Wind</span><strong id="windText"></strong></div><div class="track wind"><span class="pin" id="windPin"></span></div></div>
+</div>
+<div class="legend"><span><kbd>←</kbd> <kbd>→</kbd> Move &nbsp; <kbd>Shift</kbd> Launch &nbsp; <kbd>Esc</kbd> Pause</span><span id="status" role="status">Ready to launch</span></div>
+</main>
+<script>
+'use strict';
+const byId = id => document.getElementById(id);
+const canvas = byId('arena'), ctx = canvas.getContext('2d');
+const W = 1100, H = 540, ground = 467;
+const levels = [
+  ['Space Debris', 24, 65, 25, 1, '#c4bddb'],
+  ['Satellite', 42, 79, 52, 1, '#77ccfe'],
+  ['UFO', 49, 94, 95, 1, '#8bf1bd'],
+  ['Mothership', 69, 75, 70, 2, '#d68efe'],
+  ['Meteor', 36, 131, 82, 1, '#ff9c6e'],
+  ['Moon', 56, 90, 113, 2, '#d5c5dd'],
+  ['Planet', 69, 83, 128, 3, '#ffab8d']
+];
+const stars = Array.from({length:190}, () => [Math.random()*W, Math.random()*H, Math.random()*1.45 + .25, Math.random()*.68+.2]);
+const held = new Set();
+const clamp = (n, min, max) => Math.min(max, Math.max(min, n));
+let state = 'ready', stage = 0, score = 0, life = 3, time = 0, pad = W/2;
+let target, rocket, particles = [], trail = [], delay = 0, cooldown = 0;
+let power = 0, wind = 0, lastFrame;
+const soundButton = byId('sound');
+let soundEnabled = true;
+let audio, volume, noiseBuffer;
+
+try { soundEnabled = localStorage.getItem('shift-n-roll-sound') !== 'off'; }
+catch { /* Keep the default if storage is unavailable. */ }
+
+function updateSoundButton(){
+  soundButton.textContent = soundEnabled ? 'Sound on' : 'Sound off';
+  soundButton.setAttribute('aria-pressed', String(soundEnabled));
+}
+
+function unlockAudio(){
+  if(!soundEnabled) return;
+  const AudioEngine = window.AudioContext || window.webkitAudioContext;
+  if(!AudioEngine) return;
+  if(!audio){
+    audio = new AudioEngine();
+    volume = audio.createGain();
+    volume.gain.value = .55;
+    volume.connect(audio.destination);
+    noiseBuffer = audio.createBuffer(1, Math.ceil(audio.sampleRate*.48), audio.sampleRate);
+    const samples = noiseBuffer.getChannelData(0);
+    for(let i=0;i<samples.length;i++) samples[i] = Math.random()*2-1;
+  }
+  if(audio.state !== 'running') audio.resume().catch(() => {});
+}
+
+function tone(time, from, to, duration, strength, type = 'triangle'){
+  const oscillator = audio.createOscillator(), envelope = audio.createGain();
+  oscillator.type = type;
+  oscillator.frequency.setValueAtTime(from,time);
+  oscillator.frequency.exponentialRampToValueAtTime(to,time+duration);
+  envelope.gain.setValueAtTime(strength,time);
+  envelope.gain.exponentialRampToValueAtTime(.001,time+duration);
+  oscillator.connect(envelope).connect(volume);
+  oscillator.start(time);
+  oscillator.stop(time+duration);
+}
+
+function noise(time, from, to, duration, strength){
+  const source = audio.createBufferSource(), filter = audio.createBiquadFilter();
+  const envelope = audio.createGain();
+  source.buffer = noiseBuffer;
+  filter.type = 'lowpass';
+  filter.frequency.setValueAtTime(from,time);
+  filter.frequency.exponentialRampToValueAtTime(to,time+duration);
+  envelope.gain.setValueAtTime(strength,time);
+  envelope.gain.exponentialRampToValueAtTime(.001,time+duration);
+  source.connect(filter).connect(envelope).connect(volume);
+  source.start(time);
+  source.stop(time+duration);
+}
+
+function playSound(event){
+  if(!soundEnabled || audio?.state !== 'running') return;
+  const now = audio.currentTime;
+  switch(event){
+    case 'launch':
+      noise(now,270,1700,.26,.33);
+      tone(now,95,265,.19,.17,'sawtooth');
+      break;
+    case 'hit':
+      noise(now,2200,470,.17,.38);
+      tone(now,310,120,.14,.18);
+      break;
+    case 'impact':
+      noise(now,1250,105,.47,.48);
+      tone(now,110,35,.44,.22,'sawtooth');
+      break;
+    case 'clear':
+      [440,554,659].forEach((frequency,i)=>tone(now+i*.085,frequency,frequency,.17,.20));
+      break;
+    case 'win':
+      [523,659,784,1047].forEach((frequency,i)=>tone(now+i*.11,frequency,frequency,.29,.23));
+      break;
+    case 'loss':
+      [330,247,165].forEach((frequency,i)=>tone(now+.23+i*.17,frequency,frequency,.26,.22));
+      break;
+    case 'toggle':
+      tone(now,520,760,.12,.20);
+      break;
+  }
+}
+
+soundButton.addEventListener('click',()=>{
+  soundEnabled = !soundEnabled;
+  updateSoundButton();
+  try { localStorage.setItem('shift-n-roll-sound', soundEnabled ? 'on' : 'off'); }
+  catch { /* The button still works for this session. */ }
+  if(soundEnabled) unlockAudio();
+  if(volume) volume.gain.setValueAtTime(soundEnabled ? .55 : 0, audio.currentTime);
+  if(soundEnabled) playSound('toggle');
+});
+updateSoundButton();
+function spawn(){
+  const [name, size, speed, swing, hp, color] = levels[stage];
+  const center = 370 + Math.random()*360;
+  target = {name,size,speed,swing,hp,maxHp:hp,color,center,x:center,y:52,age:0,phase:0,hit:0};
+}
+function hud(){
+  byId('level').textContent = (stage+1)+' / '+levels.length;
+  byId('targetName').textContent = levels[stage][0];
+  byId('score').textContent = score;
+  byId('life').textContent = life+' / 3';
+}
+function status(message){ byId('status').textContent = message; }
+function show(title, description, action){
+  byId('title').textContent = title;
+  byId('intro').textContent = description;
+  byId('start').textContent = action;
+  byId('overlay').hidden = false;
+}
+function start(){
+  unlockAudio();
+  if(state !== 'paused'){
+    stage = score = time = delay = cooldown = 0;
+    life = 3; pad = W/2; rocket = null; trail = []; particles = [];
+    spawn(); hud(); status('Ready to launch');
+  }
+  held.clear();
+  state = 'playing';
+  byId('pause').disabled = false;
+  byId('overlay').hidden = true;
+  byId('start').blur();
+}
+function pause(){
+  if(state === 'paused'){ start(); return; }
+  if(state !== 'playing') return;
+  state = 'paused'; held.clear();
+  show('Game paused','Engine power and wind are frozen.','Resume');
+  byId('start').focus();
+}
+function finish(won){
+  playSound(won ? 'win' : 'loss');
+  state = 'end'; held.clear();
+  byId('pause').disabled = true;
+  show(won ? 'Earth is safe!' : 'Earth’s defense fell', 'Final score: '+score+'.', 'Play again');
+  byId('start').focus();
+}
+function gauges(){
+  power = .5 + .5*Math.sin(2.9*time-.85);
+  wind = Math.sin(1.75*time+.45);
+  byId('powerText').textContent = Math.round(35+65*power)+'%';
+  byId('windText').textContent = Math.abs(wind)<.045 ? 'Calm' : (wind<0 ? '← ' : '→ ')+Math.round(100*Math.abs(wind))+'%';
+  byId('powerPin').style.left = (35+65*power)+'%';
+  byId('windPin').style.left = (50+50*wind)+'%';
+}
+function surface(x){ return ground + 40*((x-W/2)/(W/2))**2; }
+function launch(){
+  if(state !== 'playing' || rocket || !target || cooldown>0) return;
+  rocket = {x:pad,y:surface(pad)-18,vx:wind*87,vy:-(330+330*power),drift:wind*34};
+  trail = [];
+  unlockAudio();
+  playSound('launch');
+  status('In flight · Power '+Math.round(35+65*power)+'%');
+}
+function burst(x,y,color,count){
+  for(let i=0;i<count;i++){
+    const a = Math.random()*Math.PI*2, speed = 35+Math.random()*230;
+    particles.push({x,y,vx:Math.cos(a)*speed,vy:Math.sin(a)*speed,t:.3+Math.random()*.85,color});
+  }
+}
+function update(dt){
+  time+=dt;
+  gauges();
+  pad = clamp(pad + (Number(held.has('ArrowRight'))-Number(held.has('ArrowLeft')))*400*dt,40,W-40);
+  cooldown = Math.max(0,cooldown-dt);
+  for(const p of particles){ p.x+=p.vx*dt; p.y+=p.vy*dt; p.vy+=110*dt; p.t-=dt; }
+  particles = particles.filter(p=>p.t>0);
+  if(!target){
+    delay-=dt;
+    if(delay<=0){ spawn(); hud(); status('Ready to launch'); }
+    return;
+  }
+  target.age+=dt;
+  target.y+=target.speed*dt;
+  target.x = target.center+target.swing*Math.sin(target.age*(stage===2?2.5:1.55)+target.phase);
+  target.hit = Math.max(0,target.hit-dt);
+  if(rocket){
+    rocket.vx+=rocket.drift*dt;
+    rocket.vy+=445*dt;
+    rocket.x+=rocket.vx*dt;
+    rocket.y+=rocket.vy*dt;
+    trail.push({x:rocket.x,y:rocket.y});
+    if(trail.length>25) trail.shift();
+    const dy = (rocket.y-target.y)/(stage===2||stage===3 ? .58 : .86);
+    if(Math.hypot(rocket.x-target.x,dy)<target.size+10){
+      playSound('hit');
+      target.hp--; score+=100*(stage+1);
+      burst(rocket.x,rocket.y,target.color,28); rocket=null; trail=[]; cooldown=.18;
+      if(target.hp===0){
+        burst(target.x,target.y,target.color,48);
+        target=null;
+        if(stage===levels.length-1){ hud(); finish(true); return; }
+        playSound('clear');
+        stage++; delay=1.15; status('Target destroyed · Next target incoming');
+      } else { target.hit=.22; status('Hit · '+target.hp+(target.hp===1?' hit left':' hits left')); }
+      hud();
+    }else if(rocket.y>=surface(rocket.x) || rocket.x<-20 || rocket.x>W+20){
+      rocket=null; trail=[]; cooldown=.18; status('Missed · Try again');
+    }
+  }
+  if(target && target.y+target.size*.6>=surface(target.x)){
+    playSound('impact');
+    burst(target.x,surface(target.x),'#ff754d',70);
+    life--; target=null; rocket=null; trail=[]; delay=1.2;
+    hud();
+    if(life===0) finish(false);
+    else status('Earth impact · Target respawning');
+  }
+}
+function ellipse(x,y,rx,ry,color){
+  ctx.beginPath();ctx.ellipse(x,y,rx,ry,0,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();
+}
+function polygon(points,color){
+  ctx.beginPath();ctx.moveTo(...points[0]);
+  for(const p of points.slice(1))ctx.lineTo(...p);
+  ctx.closePath();ctx.fillStyle=color;ctx.fill();
+}
+const sky=ctx.createLinearGradient(0,0,0,H);
+sky.addColorStop(0,'#080819');sky.addColorStop(.72,'#24133c');sky.addColorStop(1,'#aa5467');
+const atmosphere=ctx.createRadialGradient(570,482,8,570,482,350);
+atmosphere.addColorStop(0,'#f288764d');atmosphere.addColorStop(1,'#f2887600');
+function background(){
+  ctx.fillStyle=sky;ctx.fillRect(0,0,W,H);
+  ctx.fillStyle=atmosphere;ctx.fillRect(0,0,W,H);
+  for(const [x,y,r,a] of stars) ellipse(x,y,r,r,'rgba(232,221,255,'+a+')');
+  polygon([[0,451],[130,351],[221,406],[322,360],[468,474],[0,503]],'#382347');
+  polygon([[1100,428],[949,325],[858,385],[803,352],[654,480],[1100,512]],'#402746');
+  polygon([[0,467],[152,405],[259,459],[390,430],[527,479],[697,455],[866,411],[1100,474],[1100,540],[0,540]],'#231731');
+  ctx.fillStyle='#0e0c1b';
+  ctx.beginPath();ctx.moveTo(0,507);ctx.quadraticCurveTo(550,426,1100,507);ctx.lineTo(1100,540);ctx.lineTo(0,540);ctx.fill();
+  ctx.strokeStyle='#f694886e';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(0,507);ctx.quadraticCurveTo(550,426,1100,507);ctx.stroke();
+}
+function drawTarget(){
+  if(!target)return;
+  const {x,y,size:r,color,age,hp,maxHp,hit}=target;
+  ctx.save();ctx.translate(x,y);
+  if(hit>0)ctx.globalAlpha=.55+Math.abs(Math.sin(hit*52))*.45;
+  const gradient=ctx.createRadialGradient(-r*.34,-r*.37,2,0,0,r*1.05);
+  gradient.addColorStop(0,'#fff2e0');gradient.addColorStop(.40,color);gradient.addColorStop(1,'#35213f');
+  if(stage===0 || stage===4){
+    if(stage===4){
+      const flame=ctx.createLinearGradient(0,-r*3,0,0);
+      flame.addColorStop(0,'#ff5c5900');flame.addColorStop(1,'#ff8c59');
+      polygon([[-r,-8],[-r*.2,-r*3],[r*.8,-r],[r,10]],flame);
+    }
+    ctx.save();ctx.rotate(age*(stage===0?1.8:.44));
+    polygon([[-r*.96,-r*.25],[-r*.35,-r],[r*.49,-r*.74],[r,-r*.12],[r*.66,r*.82],[-r*.5,r*.87]],gradient);
+    ellipse(-r*.22,r*.13,r*.27,r*.17,'#45263d88');
+    ellipse(r*.38,-r*.14,r*.2,r*.22,'#45263d77');ctx.restore();
+  }else if(stage===1){
+    ctx.rotate(.24*Math.sin(age*3));
+    for(const dx of [-1,1]){
+      ctx.fillStyle='#446ed3';ctx.fillRect(dx*r*.65-r*.35,-r*.29,r*.7,r*.58);
+      ctx.strokeStyle='#a5ddff';ctx.lineWidth=2;ctx.strokeRect(dx*r*.65-r*.35,-r*.29,r*.7,r*.58);
+      for(let i=-1;i<=1;i++){ctx.fillStyle='#a5ddff';ctx.fillRect(dx*r*.65+i*r*.16,-r*.29,1,r*.58);}
+    }
+    ellipse(0,0,r*.33,r*.5,gradient);ellipse(0,-r*.43,r*.43,r*.13,'#dcf0ff');
+  }else if(stage===2){
+    ellipse(0,5,r,r*.31,gradient);ellipse(0,-r*.15,r*.48,r*.32,'#7ce5cf');
+    for(let i=-3;i<=3;i++)ellipse(i*r*.22,8,2.5,2.5,'#f5ffe3');
+  }else if(stage===3){
+    polygon([[-r,-r*.13],[-r*.68,-r*.44],[r*.35,-r*.38],[r,r*.08],[r*.67,r*.32],[-r*.67,r*.29]],gradient);
+    polygon([[-r*.62,-r*.21],[-r*.24,-r*.64],[r*.22,-r*.64],[r*.57,-r*.18]],'#ae87df');
+    for(let i=-4;i<=3;i++)ellipse(i*r*.17,3,3,2,'#e4d1ff');
+  }else{
+    if(stage===6){
+      ctx.save();ctx.rotate(-.35);ellipse(0,0,r*1.38,r*.29,'#bf7193');ellipse(0,0,r*1.12,r*.17,'#271a3b');ctx.restore();
+    }
+    ellipse(0,0,r,r*.9,gradient);
+    ctx.save();ctx.beginPath();ctx.ellipse(0,0,r,r*.9,0,0,Math.PI*2);ctx.clip();
+    if(stage===5){
+      for(const [u,v,k] of [[-.39,-.16,.21],[.28,.2,.23],[.22,-.47,.11],[-.25,.54,.13]])ellipse(u*r,v*r,k*r,k*r*.79,'#5d496d66');
+    }else{
+      for(let i=-2;i<=2;i++)ellipse(-r*.15,i*r*.31,r*1.24,r*.09,'#9e426c55');
+    }
+    ctx.restore();
+  }
+  ctx.restore();
+  if(maxHp>1){
+    for(let i=0;i<maxHp;i++){
+      ctx.fillStyle=i<hp?'#ffd0b1':'#51405f';
+      ctx.fillRect(x+(i-(maxHp-1)/2)*16-6,Math.max(12,y-r-12),12,4);
+    }
+  }
+}
+function drawRocket(x,y,angle,flying){
+  ctx.save(); ctx.translate(x,y);ctx.rotate(angle);
+  if(flying)polygon([[-5,10],[5,10],[0,23+Math.sin(time*80)*5]],'#ff9a67');
+  polygon([[-5,3],[-11,12],[-4,10],[4,10],[11,12],[5,3]],'#ff846d');
+  polygon([[0,-16],[6,-5],[5,10],[-5,10],[-6,-5]],'#f5e9ff');
+  ellipse(0,-3,3,3,'#866acc');ctx.restore();
+}
+function render(){
+  background();drawTarget();
+  const baseY = surface(pad);
+  ctx.fillStyle='#675477';ctx.fillRect(pad-24,baseY-6,48,6);
+  if(!rocket)drawRocket(pad,baseY-18,0,false);
+  for(let i=0;i<trail.length;i++){
+    const p=trail[i], a=(i+1)/trail.length;
+    ellipse(p.x,p.y,1+4*a,1+4*a,'rgba(255,143,109,'+(a*.56)+')');
+  }
+  if(rocket)drawRocket(rocket.x,rocket.y,Math.atan2(rocket.vx,-rocket.vy),true);
+  for(const p of particles)ellipse(p.x,p.y,1.5+Math.min(p.t,1),1.5+Math.min(p.t,1),p.color);
+}
+byId('start').addEventListener('click',start);
+byId('pause').addEventListener('click',pause);
+window.addEventListener('keydown', event=>{
+  if(event.key==='Escape' && !event.repeat){ pause(); return; }
+  if(state!=='playing')return;
+  if(event.key==='ArrowLeft'||event.key==='ArrowRight'){ event.preventDefault();held.add(event.key); }
+  if(event.key==='Shift'&&!event.repeat)launch();
+});
+window.addEventListener('keyup', event=>held.delete(event.key));
+window.addEventListener('blur',()=>{ if(state==='playing')pause(); });
+spawn();hud();gauges();render();
+function frame(now){
+  const dt = lastFrame===undefined ? 0 : Math.min(.035,(now-lastFrame)/1000);
+  lastFrame=now;
+  if(state==='playing'){update(dt);render();}
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</html>
