@@ -43,3 +43,7 @@ The game generates its sound effects in the browser using the Web Audio API. Sou
 ## GitHub
 
 Extract the archive and upload its contents to a repository. The archive already places `index.html` at the repository root. In **Settings → Pages**, select your default branch and **/ (root)** as the publishing source.
+
+## Play Online
+
+[Play Shift’n Roll in your browser](https://yasinfedev.github.io/shift-n-roll/)
